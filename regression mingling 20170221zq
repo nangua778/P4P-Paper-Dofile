@@ -1,0 +1,969 @@
+*********Analyse data from merge_all_stu_tea_prin dataset.dta 
+****author:zhengqiangceee@163.com 15991269421
+****time:20161220
+****objective:1.describe the data from the "merge_all_stu_tea_prin dataset.dta"
+*****         2.analyse the treatment effect of  teacher incentive
+
+
+*******************************************************************************
+****basic steps for working this paper
+*step 1: clear the basic variables
+*step 2: deal with data and outcome variables
+*step 4: regress
+********************************************************************************
+********************************************************************************
+
+clear all
+set more off
+capture log close
+
+/* 首先使用aindex的外部命令*/
+version 1
+  cap mata mata drop weight()
+  mata: 
+  void weight(string scalar varlist, string scalar touse2)
+  {
+  st_view(X=., ., tokens(varlist), touse2)
+  Y = invsym(X'X)       /* Computing the inverse of the covariance matrix */
+  b = rowsum(Y)         /* Getting the sum across rows */
+  c = colsum(b)
+  weights = b/c         /* Weights matrix is now */
+  weights
+  st_matrix("weights2", weights)
+  }
+  end
+
+  capture program drop aindex
+  program define aindex, rclass
+  syntax varlist(min=2 numeric) [if] [in] , GENerate(string) [TREATment(varname)]
+  confirm new var `generate'
+
+//Mark sample for if
+  marksample touse
+
+  tempvar treatment2
+  if "`treatment'"!="" {
+  gen `treatment2'=`treatment' if `touse'
+  }
+  if "`treatment'"=="" {
+  gen `treatment2'=0 if `touse'
+  }
+
+
+//Check name por index
+  if "`generate'"=="" {
+    di in red "Error: dummy options requires use of generate option."
+    exit
+    }
+  local genvar = "`generate'"
+
+quietly {
+
+//Local varlist : list uniq varlist
+  foreach var of local varlist {
+    summ `var' if `touse' & `treatment2'!=., meanonly
+    if r(max) > r(min) {
+      local vlist `vlist' `var'
+	}
+    else {
+      dis as txt "(`var' dropped because of zero variance)"
+	}
+  }
+
+  if "`vlist'" == "" {
+    dis as err "all variables dropped because of zero variance"
+    exit 498
+  }
+
+//Check more than one variable is specified
+  local nvar : word count `vlist'
+  if `nvar'<=1 {
+    di ""
+    di in r "At least two variables with variance different from zero should be specified"
+    di ""
+    error 102
+    exit
+  }
+
+
+//Standardising variables
+  local vlist ""
+  foreach var of local varlist {
+  tempvar std_`var' m_`var' sd_treat_`var'
+  sum `var' if `touse' & `treatment2'!=.
+  gen `m_`var''=r(mean) 
+  sum `var' if `treatment2'==0 & `touse'
+  gen `sd_treat_`var''=r(sd) 
+  gen `std_`var''=((`var'-`m_`var'')/`sd_treat_`var'') if `touse' & `treatment2'!=.
+  label var    `std_`var'' "`: variable label `var'' (standardize)"
+  local vlist `vlist' `std_`var''
+  }
+
+//Mark sample for covariance matrix
+	marksample touse2
+
+//Mata function
+  local varlist `vlist'
+  mata: weight("`varlist'","`touse'")
+
+//Creates weights for each variable
+  foreach n of numlist 1/`nvar' {
+    tempvar weight_`n'
+    gen `weight_`n'' = weights2[`n',1]
+  }
+
+//Standardized variable * weight
+  local i=1
+  foreach var of local varlist {
+    tempvar var`i'
+    gen `var`i''=`var'*`weight_`i'' if `touse'
+		local weight_`i'=round(`weight_`i'', .001)
+    local vlist2 `vlist2' `var`i''
+    local i = `i' +1
+  }
+
+// Creating the Summary Index
+  local varlist `vlist2'
+  egen `genvar'=rsum(`varlist') if `touse' & `treatment2'!=., missing
+	
+* Storing values
+  forval n=1/`nvar' {
+	return scalar weight_v`n' = `weight_`n''
+    noi dis as text "The weight for variable `n' equals:" _col(25) as res %9.3f `weight_`n''
+	}
+
+}
+*quietly
+
+end
+,
+******************step0.合并补考成绩********************************************
+/*
+/*set directory*/
+global datadir  "F:\教育实验经济研究所\论文撰写 POAR\教师激励二期 论文撰写\teacher-Incentive data_from_b+e"
+use "$datadir\raw dada\merge_all_stu_tea_prin dataset.dta",clear
+log using "$datadir\log",replace
+
+/*put results in a separate directory*/
+cd "F:\教育实验经济研究所\论文撰写 POAR\教师激励二期 论文撰写\teacher-Incentive data_from_b+e\dofile"
+gen stdid15_merge = stu_e_15_mtest_stdid
+merge m:m stdid15_merge using "F:\教育实验经济研究所\论文撰写 POAR\教师激励二期 论文撰写\teacher-Incentive data_from_b+e\raw dada\secondmath score clean.dta" 
+label var _merge "secondmath score merge"
+label var stu_e_14_mtest_g5_total_score "secondmaths core"
+codebook stu_e_14_mtest_g5_total_score 
+*/
+*set directory--xwh
+global datadir "/Users/WH/Desktop/Paper data analysis-zq/datadir"
+global working "/Users/WH/Desktop/Paper data analysis-zq/working"
+global save    "/Users/WH/Desktop/Paper data analysis-zq/save"
+
+use "$datadir/merge_all_stu_tea_prin dataset.dta",clear
+gen stdid15_merge = stu_e_15_mtest_stdid
+merge m:m stdid15_merge using "$datadir/secondmath score clean.dta" 
+label var _merge "secondmath score merge"
+count if _merge == 3  //3718 obs
+label var stu_e_14_mtest_g5_total_score "secondmaths core"
+codebook stu_e_14_mtest_g5_total_score 
+
+
+
+set more off
+***treatment_ture
+	/*treatment*/
+	rename tea_b_14_treatment treatment
+	count if treatment != .	//4009
+	codebook prin_b_14_schid if treatment != . //103
+	rename prin_b_14_schid schid
+  
+	/*102 - BUT there should be 54 p4p schools and 52 control schools:
+		what happened to 109012	and 201081 (control) and 202071 and 207091 (p4p)?*/
+	   *replace treatment = 0 if schid == "202071" | schid == "207091"
+	   *replace treatment = 1 if schid == "109012" | schid == "201081"
+	   *codebook schid if  treatment != .
+	
+	generate treatment_true = .
+		foreach num of numlist 101151 101171 101181 101201 104011 104021 104081 104101 105013 105021 105101 106012 106021 106031 106071 107011 107041 107061 107092 108011 108051 109011 109012 109061 110042 110051 111031 201022 201031 201042 201051 201081 202021 202051 202082 202083 202141 202151 203021 204022 204031 204042 204062 204111 204112 205033 205061 205082 206011 206081 207011 207021 207031 207071 {
+		replace treatment_true = 1 if schid == "`num'" 
+	}
+	
+	foreach num of numlist     101041 101051 101101 101111 104031 104032 104033 104041 105031 105061 105071 105111 106022 106081 106101 106111 107101 108012 109031 109051 109071 110071 201012 201025 201026 201072 201091 201111 202031 202034 202062 202071 202091 202092 203011 203012 203051 204021 204041 204081 204101 204113 204122 205021 205031 205032 205081 206012 206025 206031 206061 207091 {
+		replace treatment_true = 0 if schid == "`num'" 
+	}
+codebook schid //103
+***** *******************************calculate attrition************************
+count // 4312
+keep if merge_14_15 != 2 //delete 291 obs
+count //4021obs 样本
+/*delet 3 students who grade is 4*/
+codebook stu_e_15_grade
+drop if stu_e_15_grade == "4"  //3786
+
+codebook _merge //4018=337(1) + 232(2) +3449(3) 
+                //表明评估时只追踪上3449个数据，丢失337样本，原样本是3789个有效。				
+count if _merge == 3 & treatment_true == 1 //1657 obs
+count if _merge == 3 & treatment_true == 0  //1792 obs
+keep if _merge != 2 
+count //3786
+
+  /*block*/
+  gen countyid = substr(tea_b_14_teaid,1,3)
+  destring countyid ,replace
+
+ *******流失率检验*********************
+keep if _merge != 2
+gen attrition = 0
+replace attrition = 1 if _merge == 1
+codebook attrition
+**方法
+reg attrition treatment_true i.countyid  , vce(cluster schid)
+est store g_attrition
+outreg2 [g_attrition] using reg8_attrition_`var'.xls, excel replace bdec(3) sd(3)
+
+*******************************step 1 clear the basic variables**********************
+/*仅保留基线与评估都有的数据*/
+  keep if _merge == 3
+  count //3449
+*1.处理学生相关变量  
+   **stu_b_14_7  是否住宿
+   codebook stu_b_14_7 
+   tab stu_b_14_7,m
+   recode stu_b_14_7 (2=1) (1=0) (3=0) (4=0) (5=0)    
+   rename stu_b_14_7 stu_boarding
+   label var stu_boarding "学生是否本学期住宿？1=是，0=否"
+   codebook stu_boarding
+   
+   *stu_b_14_2 学生性别---stu_gender
+   tab stu_b_14_2,m 
+   codebook stu_b_14_2 
+   br stu_b_14_2 stu_e_15_gender if stu_b_14_2 == . //用评估的数据进行补充
+   destring stu_e_15_gender,replace
+   replace stu_b_14_2 = stu_e_15_gender if stu_b_14_2 == .
+   codebook stu_b_14_2
+   gen stu_gender = 1 if stu_b_14_2 == 1
+   replace stu_gender = 0 if stu_b_14_2 == 2
+   codebook stu_gender
+   tab stu_gender,m  //no missing
+		
+  *stu_b_14_3 学生年龄------stu_age stu_gender
+  tab stu_b_14_3 ,m //4个缺失值
+  br stu_b_14_3
+   /*需要根据15年的学生年龄推断14年时学生的年龄*/
+  codebook stu_e_15_4 stu_b_14_3 if stu_b_14_3 == .
+  br stu_b_14_stdid stu_e_15_4 stu_b_14_3 if stu_b_14_3 == .
+  *10506132303 查阅原始问卷 用概率可能性进行替换
+  *replace stu_e_15_4 = 2003 if stu_e_15_4 == .o & stu_b_14_3 == .
+  /*将基线学生空缺值"."用评估时该生的出生日期进行换算*/
+  destring stu_e_15_4 ,replace
+  replace stu_b_14_3 = 2014 - stu_e_15_4 if  stu_b_14_3 == .
+  clonevar stu_age = stu_b_14_3 
+  codebook stu_age
+  tab stu_age,m  //no missing
+  
+ *stu_b_14_13 父亲文化程度 father_edulevel (初中及初中以下等于0.初中以上等于1)
+ codebook stu_b_14_13 //20个缺失值,用评估时期的父亲学历替代
+ tab stu_b_14_13 ,m
+ replace stu_b_14_13 =0 if stu_b_14_13 <= 3
+ replace stu_b_14_13 =1 if stu_b_14_13 >= 4 & stu_b_14_13 != . 
+ tab  stu_b_14_13,m
+ 
+ /*处理评估时父亲学历的问题*/
+ codebook stu_e_15_10  //3个缺失值
+ tab stu_e_15_10  if stu_e_15_10 == "" ,m
+ replace stu_e_15_10 = ".o" if stu_e_15_10 == "NA" | stu_e_15_10 == "离婚"
+ destring  stu_e_15_10,replace
+ codebook stu_e_15_10 
+ replace stu_e_15_10 =0 if stu_e_15_10 <= 4
+ replace stu_e_15_10 =1 if stu_e_15_10 >= 5 & stu_e_15_10 != . & stu_e_15_10 != .o 
+ codebook  stu_e_15_10
+ tab stu_e_15_10,m  //3 missing
+	
+   /*根据评估时的数据对基线父亲学历进行补充*/
+ br stu_b_14_13 stu_e_15_10 if stu_b_14_13 == .
+ replace stu_b_14_13 = stu_e_15_10  if stu_b_14_13 == .
+ codebook stu_b_14_13 
+ gen father_edulevel = stu_b_14_13 
+ label var father_edulevel " 1 = 初中及以上  0 = 初中以下" 
+ codebook father_edulevel  //no missing
+  
+ *stu_b_14_17 妈妈文化程度--- mother_edulevel
+ codebook stu_b_14_17
+ tab stu_b_14_17,m //43个缺失值
+ replace stu_b_14_17 =0 if stu_b_14_17 <= 3
+ replace stu_b_14_17 =1 if stu_b_14_17 >= 4 & stu_b_14_17 != . 
+ codebook  stu_b_14_17 
+    /*处理评估时母亲的学历*/
+ tab stu_e_15_11 ,m  // 4个缺失值，7个特殊值
+ replace stu_e_15_11 = ".o" if stu_e_15_11 == "离婚" | stu_e_15_11 == "母亲从出生就不在了"  ///
+      | stu_e_15_11 == "去世" | stu_e_15_11 == "母亲去世"  
+ destring stu_e_15_11 ,replace
+ codebook stu_e_15_11  //4个缺失值,7个特殊值
+ replace stu_e_15_11 =0 if stu_e_15_11 <= 4
+ replace stu_e_15_11 =1 if stu_e_15_11>= 5 & stu_e_15_11 != . & stu_e_15_11 != .o 
+ codebook  stu_e_15_11
+   /*根据评估时母亲的学历补充基线母亲的学历的缺失值*/
+ br stu_b_14_17 stu_e_15_11 if stu_b_14_17 == .
+ replace stu_b_14_17 = stu_e_15_11  if stu_b_14_17 == .
+ codebook stu_b_14_17 //有5个值不知道 缺失
+ replace stu_b_14_17 = . if stu_b_14_17 == .o
+ gen mother_edulevel = stu_b_14_17
+ label var mother_edulevel " 1 = 初中及以上  0 = 初中以下" 
+ codebook mother_edulevel  //5 missing
+
+ 
+ ***famil_asset_family 
+ **stu_e_15_12  载货或者拉客的汽车
+ **stu_e_15_13   微波炉或者电磁炉
+ **stu_e_15_14   电冰箱
+ **stu_e_15_15    照相机
+ **stu_e_15_16    电脑
+ ** stu_e_15_17   电扇
+ **stu_e_15_18     抽水马桶
+ 
+misstable summarize stu_e_15_12-stu_e_15_18
+	foreach var of varlist stu_e_15_12-stu_e_15_18{
+	destring `var' ,replace
+	recode `var' (2=0)
+	replace `var' = 0 if `var' == . 
+	}
+		
+polychoricpca stu_e_15_12-stu_e_15_18, nscore(1) score(ses)
+rename ses1 family_asset
+codebook  family_asset
+rename family_asset stu_asset_family
+
+ **2.处理老师相关变量
+ **tea_b_14_tea_30 教龄 ---tea_experience
+ tab tea_b_14_tea_30 ,m
+ sum tea_b_14_tea_30,d //meadian =8
+ codebook tea_b_14_tea_30  //47 missing
+ replace tea_b_14_tea_30 =30 if tea_b_14_teaid=="2020711"  //教龄打电话确认
+ gen tea_experience = 1 
+ replace tea_experience = 0 if tea_b_14_tea_30 <= 8
+ label var  tea_experience "1=(>=median);0=(<median)"
+ codebook tea_experience 
+ *tea_b_14_tea_35 教师月工资 ----tea_base_salary
+ tab tea_b_14_tea_35,m
+ codebook tea_b_14_tea_35  //87 missing
+ list tea_b_14_fillername tea_b_14_school tea_b_14_teaid if tea_b_14_tea_35==.  //编码为1051111和2020711的老师没有月工资数据(xwh)
+ list tea_b_14_tea_21 tea_b_14_tea_8 if tea_b_14_teaid=="1051111"
+ codebook tea_b_14_tea_8
+ tabstat tea_b_14_tea_35 if tea_b_14_tea_8==6, stat (mean)
+ replace tea_b_14_tea_35=900 if tea_b_14_teaid=="1051111"  //打电话确认（xwh）
+ replace tea_b_14_tea_35=1600 if tea_b_14_teaid=="2020711"  //打电话确认(zq)
+ sum tea_b_14_tea_35,d  //median =3142
+ gen tea_base_salary = 1 
+ replace tea_base_salary = 0 if tea_b_14_tea_35 <= 3142
+ label var  tea_base_salary "1=(>=median);0=(<median)"
+ codebook tea_base_salary
+
+ 
+ * tea_b_14_tea_1 年龄  --tea_age 
+  tab tea_b_14_tea_1,m
+  codebook tea_b_14_tea_1  //47 missing
+  gen tea_age = tea_b_14_tea_1
+  gen teaage = 2014-tea_b_14_tea_1
+  codebook teaage
+  
+ *tea_b_14_tea_3  性别 ----tea_gender 1=男 0=女
+ tab tea_b_14_tea_3 ,m
+ codebook tea_b_14_tea_3  //47 missing
+ replace tea_b_14_tea_3 = 2 if tea_b_14_teaid=="2020711"  //查阅原始问卷，改教师是王秀兰 女
+ gen tea_gender = 1
+ replace tea_gender = 0 if tea_b_14_tea_3 == 2
+ codebook tea_gender
+ label var tea_gender "1=男 0=女"
+
+  *tea_b_14_tea_4 民族 --tea_ethnic 1=hanzu 0 =huizu
+  tab tea_b_14_tea_4 ,m
+  codebook tea_b_14_tea_4  //47 missing
+  gen tea_ethnic =1
+  replace tea_ethnic = 0 if tea_b_14_tea_4 != 1
+  codebook tea_ethnic
+  label var tea_ethnic "1=hanzu 0 =huizu"
+ 
+ 
+  /*tea_b_14_tea_8 教师的学历  --tea_degree-- 1= completed university edication
+                 0=not completed university education*/
+ tab tea_b_14_tea_8,m
+codebook tea_b_14_tea_8  //47 missing
+ gen tea_degree =0 if  tea_b_14_tea_8 <5 
+replace tea_degree =1 if tea_b_14_tea_8 >=5
+codebook tea_degree
+ label var tea_degree "1= completed university edication; 0=not completed university education"
+  
+ *tea_b_14_tea_9 教师的专业 ----tea_major 
+ tab tea_b_14_tea_9,m
+codebook  tea_b_14_tea_9  //47 missing
+gen tea_major =1 if tea_b_14_tea_9 == 2
+ replace tea_major =0 if tea_b_14_tea_9 != 2
+codebook tea_major 
+label var tea_major "1=math 0= others but bot math"
+
+**tea_b_14_tea_6 户口类型 -----tea_hukou 1=农村 0 =城市
+ tab tea_b_14_tea_6 ,m
+ codebook tea_b_14_tea_6  //47 missing
+gen tea_hukou = 1 if tea_b_14_tea_6 == 1
+replace  tea_hukou = 0 if tea_b_14_tea_6 != 1
+codebook tea_hukou
+label var tea_hukou "1=农村 0=城市"
+ 
+ **tea_b_14_tea_19 教师资格证 ---tea_certification
+  tab tea_b_14_tea_19,m
+  codebook tea_b_14_tea_19  //47 missing
+ gen tea_certification =1 if tea_b_14_tea_19 == 1
+ replace  tea_certification =0 if tea_b_14_tea_19 != 1
+ codebook tea_certification
+ label var tea_certification "1= yes ;0=no"
+
+ 
+  **tea_b_14_tea_21 教师职称 --tea_title 
+ tab tea_b_14_tea_21 ,m
+ codebook tea_b_14_tea_21  //47 missing
+ gen tea_title =0 if tea_b_14_tea_21 <=2
+ replace tea_title =1 if tea_b_14_tea_21 >2
+ codebook tea_title
+ label var tea_title "1=职称小学高教及以上 ； 0=小学高教以下"
+
+ 
+  **tab tea_b_14_tea_28 对教师工作满意程度 --tea_satisfaction
+   //4=非常满意 3=满意 2=不好说 1= 不满意
+ tab tea_b_14_tea_28,m
+ codebook tea_b_14_tea_28  //47 missing
+ recode tea_b_14_tea_28 (4=1)(1=4)(2=3)(3=2) ,gen(tea_satisfaction)
+ codebook tea_satisfaction
+ label var tea_satisfaction "4=非常满意 3=满意 2=不好说 1= 不满意"
+
+**tea_b_14_tea_23 累计一共当了多长时间班主任 tea_alltime_headteacher
+  tab tea_b_14_tea_23,m
+  codebook tea_b_14_tea_23  //47 missing
+  gen  tea_alltime_headteacher = tea_b_14_tea_23
+  codebook tea_alltime_headteacher
+
+  
+  /*Others' teacher characteristics*/
+  
+  **1 teacher inequality averse.
+  rename tea_b_14_BTS_3 t_inneqaverse
+  codebook t_inneqaverse
+  **2.Teachers reported effort on the top 1/3, middle 1/3, bottom 1/3 of achievers
+  destring  tea_b_14_BTS_1c, replace
+  g t_effortonlow = tea_b_14_BTS_1c // effort on lowest
+			 
+  destring   tea_b_14_BTS_1b , replace
+  g t_effortonmid =  tea_b_14_BTS_1b  // effort on middle
+			
+  destring  tea_b_14_BTS_1a, replace
+  g t_effortontop = tea_b_14_BTS_1a // effort on top
+ **3.Teacher baseline prosocial motivation
+ 
+ aindex tea_b_14_tea_103 tea_b_14_tea_105 tea_b_14_tea_107 tea_b_14_tea_109, gen(t_prosocial)
+ codebook  t_prosocial
+ **4.Teacher baseline intrinsic motivation
+  aindex tea_b_14_tea_104 tea_b_14_tea_106 tea_b_14_tea_108 tea_b_14_tea_110, gen(t_intrinsic)
+  codebook t_intrinsic
+  **5 Teacher opinion of performance pay at baseline bt_section3_question41-51
+  recode tea_b_14_tea_41 tea_b_14_tea_42  tea_b_14_tea_44  tea_b_14_tea_49 (1=4) (2=3) (3=2) (4=1) // higher is better
+  aindex tea_b_14_tea_41 tea_b_14_tea_42  tea_b_14_tea_44 tea_b_14_tea_45 tea_b_14_tea_46 tea_b_14_tea_47 tea_b_14_tea_48 tea_b_14_tea_49 tea_b_14_tea_50 tea_b_14_tea_51, gen(t_op_index)
+  codebook t_op_index
+  global tea_charac t_inneqaverse t_effortonlow t_effortonmid t_effortontop t_prosocial t_intrinsic t_op_index
+ 
+ 
+
+****************step 2: deal with data and outcome variables*******************
+   
+   
+/*student scores*/
+   *notes:
+   gen stu_e2_total_score = stu_e_14_mtest_g5_total_score
+	
+	
+	/*outcome*/
+	summarize stu_e2_total_score if treatment_true == 0
+	generate z_math_endline2 =(stu_e2_total_score-`r(mean)')/`r(sd)'
+    sum z_math_endline2 
+	
+	* generating alternative scores 
+	foreach n of numlist 1/30{
+		local x = 31 - `n'
+		ttest stu_e_15_mtest_g5_`n'_cor, by(mtesttype)
+	}
+
+	alpha stu_e_15_mtest_g5_*_cor, item asis
+		
+	egen score_g5items1 =rowtotal(Q1_cor - Q5_cor),missing
+	egen score_10easyitems1 = rowtotal(Q3_cor Q2_cor Q9_cor Q8_cor Q6_cor Q11_cor Q10_cor Q4_cor Q28_cor Q7_cor),missing
+    egen score_10mediumitems1 = rowtotal(Q5_cor	Q27_cor	Q14_cor	Q13_cor	Q1_cor	Q17_cor	Q16_cor	Q12_cor Q22_cor Q29_cor), missing
+   	egen score_10harditems1 = rowtotal(Q30_cor	Q19_cor	Q15_cor	Q18_cor	Q23_cor	Q21_cor	Q20_cor	Q26_cor	Q25_cor	Q24_cor), missing
+	egen score_15easyitems1 = rowtotal(Q3_cor Q2_cor	Q9_cor	Q8_cor	Q6_cor	Q11_cor	Q10_cor	Q4_cor	Q28_cor	Q7_cor	Q5_cor	Q27_cor	Q14_cor	Q13_cor	Q1_cor), missing
+	egen score_15harditems1 = rowtotal(Q17_cor	Q16_cor	Q12_cor	Q22_cor	Q29_cor	Q30_cor	Q19_cor	Q15_cor	Q18_cor	Q23_cor	Q21_cor	Q20_cor	Q26_cor	Q25_cor	Q24_cor), missing
+	egen score_20easyitems1 = rowtotal(Q3_cor	Q2_cor	Q9_cor	Q8_cor	Q6_cor	Q11_cor	Q10_cor	Q4_cor	Q28_cor	Q7_cor	Q5_cor	Q27_cor	Q14_cor	Q13_cor	Q1_cor	Q17_cor	Q16_cor	Q12_cor	Q22_cor	Q29_cor), missing
+	
+	sum score_g5items1 
+    sum score_10easyitems1
+	sum score_10mediumitems1
+	sum score_10harditems1
+	sum score_15easyitems1
+	sum score_15harditems1 
+    sum score_20easyitems1
+
+/*secondary outcomes*/
+	
+ /*Student’s taught easy, middle, advanced mathematics curricula by grade 6 teacher;
+   stu_e_14_82 thru stu_e_14_90 inclusive (each are dummy variables taking values of 1 = taught, 0 = not taught) 	*/
+					foreach var of varlist stu_e_15_95-stu_e_15_103 {
+						destring `var', replace
+						replace `var' = 0 if `var' == 2
+					}
+					
+					/*a) The average represents degree to which teacher taught easy curricula*/
+						
+						generate t_taught_easy = (stu_e_15_95 + stu_e_15_96 + stu_e_15_97)/3 
+	
+					/*b) The average represents degree to which teacher taught medium level of difficulty curricula*/
+
+						generate t_taught_med = (stu_e_15_98 + stu_e_15_99 + stu_e_15_100)/3 
+
+					/*c) The average represents degree to which teacher taught advanced curricula*/
+
+						generate t_taught_hard = (stu_e_15_101 + stu_e_15_102 + stu_e_15_103)/3 
+
+
+	/*covariates*/
+	
+		
+	
+	/*pre-test*/
+     	rename  stu_b_14_zmath z_math_baseline
+
+	     /*for students*/			
+	/*math self concept - redefine so higher means better self-concept*/
+	   destring stu_e_15_23-stu_e_15_67,replace
+		recode stu_e_15_61 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_63 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_64 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_66 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		aindex stu_e_15_59 stu_e_15_61 stu_e_15_63 stu_e_15_64 stu_e_15_66, generate(math_self_concept) 
+		codebook math_self_concept
+
+	/*math anxiety - already defined so higher means more anxiety*/
+
+		aindex stu_e_15_58 stu_e_15_60 stu_e_15_62 stu_e_15_65 stu_e_15_67, generate(math_anxiety) 
+		
+	/*math - intrinsic motivation for - redefine so higher is more motivation*/ 
+		recode stu_e_15_50 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+	    recode stu_e_15_52 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_53 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_55 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		aindex stu_e_15_50 stu_e_15_52 stu_e_15_53 stu_e_15_55, generate(math_intrin_mtv)  
+
+		/*math - instrumental motivation for*/ 
+		recode stu_e_15_51 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_54 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_56 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		recode stu_e_15_57 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+		aindex stu_e_15_51 stu_e_15_54 stu_e_15_56 stu_e_15_57, generate(math_instr_mtv)  
+/*Student time spent on math - defined so that higher is "more time on math";
+	When analyzing indicators individually, treat individual variables as ordinal category outcome variables (run an ordered probit model in a manner parallel to equation (1))*/
+	codebook stu_e_15_92_2
+	replace  stu_e_15_92_2 = "5" if  stu_e_15_92_2 == "5,3"
+	destring 	stu_e_15_68 stu_e_15_69 stu_e_15_72 stu_e_15_73  stu_e_15_92_2,replace		
+	aindex stu_e_15_68 stu_e_15_69 stu_e_15_72 stu_e_15_73  stu_e_15_92_2, generate(stu_time_math)   
+
+	rename stu_e_15_68 got_hmwk_times
+	rename stu_e_15_69 hand_in_hmwk_times
+	rename stu_e_15_92_2 hmwk_duration
+	rename stu_e_15_72 teacher_tutor_times
+	rename stu_e_15_73 missed_class_times
+	
+/*Student perception of teacher practices - defined so higher is teacher did positive teaching practices more often
+				When analyzing indicators individually, construct individual dummy variables corresponding to e_31 thru e_44. 
+					Specifically, for each variable split the ordinal values into two categories so as to minimize number of responses between each category.*/
+				
+	           recode stu_e_15_28-stu_e_15_41 (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+				aindex stu_e_15_28-stu_e_15_41, generate(stu_percept_t_practice)  
+				
+				recode stu_e_15_28 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(stu_teaching32)
+				label variable stu_teaching32 "teacher gave clear goals" 
+				recode stu_e_15_29 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(stu_teaching33)
+				label variable stu_teaching33 "teacher gave time to express"
+				recode stu_e_15_30 (4 = 1 "every class") (3 2 1 = 0 "not every class"), generate(stu_teaching34)
+				label variable stu_teaching34 "teacher gives hmwk accord ability"	
+				recode stu_e_15_31 (4 = 1 "every class") (3 2 1 = 0 "not every class"), generate(stu_teaching35)
+				label variable stu_teaching35 "teacher gives long hmwk"
+				recode stu_e_15_32(4 3 = 1 "most or all classes") (2 1 = 0 "sometimes or never"), generate(stu_teaching36)
+				label variable stu_teaching36 "teacher tells us how we're doing"
+				recode stu_e_15_33 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(stu_teaching37)
+				label variable stu_teaching37 "teacher confirms we understand"
+				recode stu_e_15_34 (4 3 = 1 "most or all classes") (2 1 = 0 "sometimes or never"), generate(stu_teaching38)
+				label variable stu_teaching38 "teacher has us work in small groups"
+				recode stu_e_15_35(4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(stu_teaching39)
+				label variable stu_teaching39 "teacher reviews before new material"
+				recode stu_e_15_36 (4 = 1 "every class") (3 2 1 = 0 "not every class"), generate(stu_teaching40) 
+				label variable stu_teaching40 "teacher lets us help design class activities"
+				recode stu_e_15_37 (4 3 = 1 "most or all classes") (2 1 = 0 "sometimes or never"), generate(stu_teaching41) 
+				label variable stu_teaching41 "teacher helps me know strengths/weaknesses"
+				recode stu_e_15_38 (4 3 = 1 "most or all classes") (2 1 = 0 "sometimes or never"), generate(stu_teaching42) 
+				label variable stu_teaching42 "teacher gives expectations for tests/hmwk"
+				recode stu_e_15_39 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(stu_teaching43) 
+				label variable stu_teaching43 "teacher tells us what we need to master"
+				recode stu_e_15_40 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(stu_teaching44)
+				label variable stu_teaching44 "teacher tells me how to improve my math ability"
+				recode stu_e_15_41 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(stu_teaching45) 
+				label variable stu_teaching45 "teacher gives me (extra) math exercises"
+			/*Student perception of teacher care/effort - redefined so higher is more care/effort;
+				When analyzing indicators individually, construct individual dummy variables corresponding to e_26 thru e_30. 
+					Specifically, for each variable split the ordinal values into two categories so as to minimize number of responses between each category.*/
+			
+		
+				recode stu_e_15_23-stu_e_15_27 (1 = 4) (2 = 3) (3 = 2) (4 = 1)	
+				aindex stu_e_15_23 stu_e_15_24 stu_e_15_25 stu_e_15_26 stu_e_15_27, generate(t_cares) 
+				
+				recode stu_e_15_23 (4 3 2 = 1 "sometimes") (1 = 0 "never"), generate(teacher_care23)
+				label variable teacher_care23 "teacher cares about my math ability"	
+				recode stu_e_15_24 (4 3 = 1 "most or all classes") (1 2 = 0 "sometimes or never"), generate(teacher_care24)
+				label variable teacher_care24 "teacher gives extra help if I need it"	
+				recode stu_e_15_25 (4 3 2 = 1 "sometimes") (1 = 0 "never"), generate(teacher_care25)
+				label variable teacher_care25 "teacher help me with studies" 
+				recode stu_e_15_26 (4 3 2 = 1 "sometimes") (1 = 0 "never"), generate(teacher_care26)
+				label variable teacher_care26 "teacher talks/guides me to understand class material"
+				recode stu_e_15_27 (4 3 = 1 "most or all classes") (1 2 = 0 "sometimes or never"), generate(teacher_care27)
+				label variable teacher_care27 "teacher gives me chances to express ideas"	/*1 is most or all classes, 0 is otherwise*/
+			/*Student perception of teachers’ ability to manage classroom - redefined so higher is more ability;
+				FOR LATER: When analyzing indicators individually, construct individual dummy variables corresponding to e_42 thru e_45. 
+					Specifically, for each variable split the ordinal values into two categories so as to minimize number of responses between each category.*/
+				
+				recode stu_e_15_42 stu_e_15_43 stu_e_15_44  (1 = 4) (2 = 3) (3 = 2) (4 = 1)
+				aindex stu_e_15_42 stu_e_15_43 stu_e_15_44 stu_e_15_45, generate(t_can_manage) 
+				
+				recode stu_e_15_42 (4 3 2 = 1) (1 = 0), generate(t_manage42)	
+				label variable t_manage42 "teacher makes us listen attentively"
+				recode stu_e_15_43 (4 3 2 = 1) (1 = 0), generate(t_manage43)	
+				label variable t_manage43 "teacher can keep class discipline"
+				recode stu_e_15_44 (4 3 2 = 1) (1 = 0), generate(t_manage44)	
+				label variable t_manage44 "teacher gives class on time"
+				recode stu_e_15_45 (4 3 2 = 1) (1 = 0), generate(t_manage45)	/*I THINK SPLITTING LIKE THIS IS WEIRD*/
+				label variable t_manage45 "teacher does not need time to get class quite "	
+	
+			/*Student perception of student-teacher communication - redefined so higher is more often;
+				FOR LATER: When analyzing indicators individually, construct individual dummy variables corresponding to e_49 thru e_52. 
+					Specifically, for each variable split the ordinal values into two categories so as to minimize number of responses between each category.*/
+				
+				recode stu_e_15_46 stu_e_15_47 stu_e_15_48 stu_e_15_49 (1 = 4) (2 = 3) (3 = 2) (4 = 1), label("")
+				aindex stu_e_15_46 stu_e_15_47 stu_e_15_48 stu_e_15_49, generate(t_communicates) 
+				recode stu_e_15_46 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(t_commun46)
+				label variable t_commun46 "teacher talks with me about my progress"
+				recode stu_e_15_47 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(t_commun47)
+				label variable t_commun47 "teacher talks with parents about my progress"
+				recode stu_e_15_48 (4 3 2 = 1 "at least sometimes") (1 = 0 "never"), generate(t_commun48)
+				label variable t_commun48 "teacher sends letter to home about my progress"
+				recode stu_e_15_49 (4 = 1 "every week or more") (3 2 1 = 0 "less than every week"), generate(t_commun49)
+				label variable t_commun49 "teacher told me important to test well in math"
+				
+      	/*Substitution of student time away from non-math subjects*/
+				tab stu_e_15_104 ,m
+				replace  stu_e_15_104 = "" if  stu_e_15_104 == "??"
+				tab stu_e_15_79 ,m
+				replace stu_e_15_79 = "" if stu_e_15_79 =="老师上周刚转来"
+				tab stu_e_15_81 ,m
+                replace stu_e_15_81 = "0" if stu_e_15_81 == "0,没有上过科学课" | stu_e_15_81 == "0,无此课" ///
+				     | stu_e_15_81 == "0,有、但老师一节??" | stu_e_15_81 == "0,有但老师一节课也不来" | stu_e_15_81 == "0,有老师没有来过"
+				destring stu_e_15_101 - stu_e_15_106 stu_e_15_79 stu_e_15_80 stu_e_15_81,replace
+				aindex stu_e_15_101 - stu_e_15_106 stu_e_15_79 stu_e_15_80 stu_e_15_81, generate(substitute_time) 
+
+			/*Parents involved in schoolwork - 
+				FOR LATER: When analyzing indicators individually, construct individual dummy variables corresponding to e_19 thru e_22. 
+					Specifically, for each variable split the ordinal values into two categories so as to minimize number of responses between each category.*/
+				destring  stu_e_15_19 stu_e_15_20 stu_e_15_21 stu_e_15_22  ,replace 
+				recode stu_e_15_19 stu_e_15_20 stu_e_15_21 stu_e_15_22 (1 = 5) (2 = 4) (3 = 3) (4 = 2) (5 = 1), label("")
+				aindex stu_e_15_19 stu_e_15_20 stu_e_15_21 stu_e_15_22, generate(parents_help_hmwk) 
+				recode stu_e_15_19 (5 = 1 "every day") (4 3 2 1 = 0 "less than every day"), generate(parents_help19)
+				label variable parents_help19 "parents ask what I learned at school"
+				recode stu_e_15_20 (5 4 = 1 "every week") (3 2 1 = 0 "less than every week"), generate(parents_help20)
+				label variable parents_help19 "parents and I discuss my studies at school"
+				recode stu_e_15_21 (5 = 1 "every day") (4 3 2 1 = 0 "less than every day"), generate(parents_help21)
+				label variable parents_help19 "parents require me to finish homework on time"
+				recode stu_e_15_22 (5 4 = 1 "every week") (3 2 1 = 0 "less than every week"), generate(parents_help22) 
+				label variable parents_help19 "parents check my homework"
+				
+			
+	/*moderators*/
+	/*terciles in the sample*/
+		count if z_math_baseline != . //3449
+		bysort tea_e_15_id: egen z_math_b_rank = rank(z_math_baseline)	
+		bysort tea_e_15_id: egen nranked = count(z_math_baseline)
+		bysort tea_e_15_id: gen maxrank = nranked	
+		g zmath5_pctrank = z_math_b_rank/maxrank 
+	 
+	*Create Terciles	
+			
+		xtile z_math_baseline_terc = z_math_baseline if treatment_true != ., nq(3)
+	
+		g top_z_math_baseline = (z_math_baseline_terc==3)
+		replace top_z_math_baseline =. if z_math_baseline ==.
+		g mid_z_math_baseline = (z_math_baseline_terc==2)
+		replace mid_z_math_baseline=. if z_math_baseline==.		
+		g bottom_z_math_baseline= (z_math_baseline_terc==1)
+		replace bottom_z_math_baseline=. if z_math_baseline==.
+			
+		label define ter 1  "bottom" 2 "mid" 3 "top"	
+
+		g top_zmath5_pctrank = (zmath5_pctrank>=2/3)
+		replace top_zmath5_pctrank=. if zmath5_pctrank==.
+		g mid_zmath5_pctrank = (zmath5_pctrank<2/3 & zmath5_pctrank>1/3)
+		replace mid_zmath5_pctrank=. if zmath5_pctrank==.		 
+		g bottom_zmath5_pctrank= (zmath5_pctrank<=1/3)
+		replace bottom_zmath5_pctrank=. if zmath5_pctrank==.
+
+		generate zmath5_pctrank_terc = .
+		replace zmath5_pctrank_terc = 1 if bottom_zmath5_pctrank == 1
+		replace zmath5_pctrank_terc = 2 if mid_zmath5_pctrank == 1
+		replace zmath5_pctrank_terc = 3 if top_zmath5_pctrank == 1
+	
+		label values zmath5_pctrank_terc ter
+		
+		**notes: 
+		  **with class :zmath5_pctrank_terc(1,2,3)
+		  **across sample : mid_z_math_baseline top_z_math_baseline bottom_z_math_baseline  
+
+	
+
+	
+	/*定义回归变量*/
+	global imp_covs z_math_endline2  //y
+	global control_covs  stu_age stu_gender stu_boarding  father_edulevel mother_edulevel stu_asset_family tea_base_salary tea_experience tea_gender  //控制变量
+    global stu_math_psych math_self_concept math_anxiety math_intrin_mtv math_instr_mtv  //学生数学认知
+    global stu_teaching  t_taught_easy t_taught_med t_taught_hard   t_cares t_can_manage t_communicates stu_time_math parents_help_hmwk //学生认为的教师的行为改变
+	global q_difficulty_subscore score_10easyitems1 score_10mediumitems1 score_10harditems1 score_15easyitems1 score_15harditems1 
+	global stu_perception stu_percept_t_practice stu_time_math
+	
+	/*global time_on_math_items got_hmwk_times hand_in_hmwk_times hmwk_duration teacher_tutor_times missed_class_times
+    global stu_teaching_items stu_teaching28-stu_teaching41
+    global teacher_cares_items teacher_care23-teacher_care27
+    global teacher_manages_items t_manage42-t_manage45 
+    global teacher_commun_items t_commun46-t_commun49			
+    global parents_help_items parents_help19-parents_help22*/
+
+
+	gen sample_1=1
+    foreach x of varlist $imp_covs $control_covs $stu_math_psych $stu_teaching $stu_perception $q_difficulty_subscore{          
+    destring `x',replace 
+    replace sample_1=0 if `x'==. | `x'==.o 
+    }
+	codebook sample_1
+	keep if sample_1==1
+	save "$save/3411.dta",replace
+
+//教师个数
+use "$save/3411.dta",clear
+bysort tea_b_14_teaid: keep if _n==1
+	
+	
+	
+	
+ *regress 1 :分析干预对学生成绩的影响
+reg z_math_endline2 treatment_true z_math_baseline , vce(cluster schid)
+est store a_`var'
+reg z_math_endline2 treatment_true z_math_baseline  i.countyid  , vce(cluster schid)
+est store  b_`var'
+reg z_math_endline2 treatment_true z_math_baseline $control_covs i.countyid , vce(cluster schid)
+est store  c_`var'
+
+outreg2 [*_`var' ] using reg1_`var'.xls, excel replace bdec(2) sd(2)
+
+*regress 2 ：干预对中间变量的影响
+
+
+ foreach var of varlist $stu_math_psych $stu_teaching $stu_perception {
+ reg `var' treatment_true z_math_baseline $control_covs i.countyid  , vce(cluster schid)
+ est store e_`var'
+ }
+	
+outreg2 [e_* ] using reg2_`var'.xls, excel replace bdec(2) sd(2)
+
+/*
+**regress3 :干预对不同难度的题目的影响
+foreach var of varlist $q_difficulty_subscore{
+summarize `var' if treatment_true == 0 
+generate z_`var' = (`var' - `r(mean)')/`r(sd)'
+}
+
+foreach var of varlist $q_difficulty_subscore {
+ reg `var' treatment_true z_math_baseline $control_covs i.countyid  , vce(cluster schid)
+est store dd_`var'
+}
+outreg2 [dd_* ] using reg3_`var'.xls, excel replace bdec(2) sd(2)
+*/
+est clear 
+
+		
+********************************异质性分析*****************************************
+***H1:对不同排名的学生成绩的影响
+**regress 4:干预对不同排名的学生的成绩的影响		
+  ***for bottom (33%)
+   /*with class terciles*/ 
+    reg z_math_endline2 treatment_true z_math_baseline  $control_covs i.countyid  if  zmath5_pctrank_terc == 1, vce(cluster schid)  
+	 est store f_b_with 
+	  /*across sample terciles*/  
+    reg z_math_endline2 treatment_true  z_math_baseline $control_covs i.countyid if  bottom_z_math_baseline == 1, vce(cluster schid)  
+       est  store f_b_across
+	   
+  ***for medium(33%)
+   /*with class terciles*/ 
+    reg z_math_endline2 treatment_true z_math_baseline  $control_covs i.countyid if zmath5_pctrank_terc== 2, vce(cluster schid)  
+	 est store f_m_with 
+	  /*across sample terciles*/  
+    reg z_math_endline2 treatment_true z_math_baseline  $control_covs i.countyid if  mid_z_math_baseline == 1, vce(cluster schid)  
+       est  store f_m_across
+	   
+  ***for top (33%)
+   /*with class terciles*/ 
+    reg z_math_endline2 treatment_true z_math_baseline  $control_covs i.countyid if  zmath5_pctrank_terc == 3, vce(cluster schid)  
+	 est store f_t_with 
+	  /*across sample terciles*/  
+    reg z_math_endline2 treatment_true z_math_baseline   $control_covs i.countyid if top_z_math_baseline == 1, vce(cluster schid)  
+       est  store f_t_across
+	   
+outreg2 [f_*_with] using reg4_with_`var'.xls, excel replace bdec(2) sd(2)
+
+outreg2 [f_*_across] using reg5_accross_`var'.xls, excel replace bdec(2) sd(2)
+/*			
+*** H2：对不同性别、不同家庭资产、是否寄宿学生的影响
+est clear
+*for gender
+codebook stu_gender
+global control_covs1  stu_age father_edulevel mother_edulevel stu_asset_family tea_base_salary tea_experience tea_gender stu_boarding //控制变量
+reg z_math_endline2 i.treatment_true##i.stu_gender z_math_baseline $control_covs1 i.countyid  , vce(cluster schid)  
+est store h_gender
+
+*for asset 
+/*tab stu_asset_family ,m
+sum stu_asset_family,detail //中值为-0.0136895
+gen asset = 1 
+replace asset = 0 if  stu_asset_family < -0.0136895
+codebook asset
+destring asset,replace
+global control_covs2  stu_age stu_gender father_edulevel mother_edulevel  lntea_salary lntea_experience tea_gender class_size //控制变量
+reg z_math_endline2  i.treatment_true##i.asset  z_math_baseline  $control_covs2  i.countyid  if  stu_e_15_grade == "5" , vce (cluster schid)
+est store h_asset*/
+
+tab stu_asset_family ,m
+sum stu_asset_family ,d  //25% -0.9500427 75%：0.7964559
+gen asset = 1 if stu_asset_family > 0.7964559
+replace asset = 0 if  stu_asset_family < -0.9500427
+codebook asset
+destring asset,replace
+global control_covs2  stu_age stu_gender father_edulevel mother_edulevel stu_boarding tea_base_salary tea_experience tea_gender  //控制变量
+reg z_math_endline2  i.treatment_true##i.asset  z_math_baseline  $control_covs2  i.countyid  , vce (cluster schid)
+est store h_asset
+
+*for zhusu
+global control_covs3  stu_age stu_gender father_edulevel mother_edulevel  tea_base_salary tea_experience tea_gender  //控制变量
+reg z_math_endline2 i.treatment_true##i.stu_boarding z_math_baseline $control_covs3 i.countyid , vce(cluster schid)  
+est store h_zhusu
+
+outreg2 [h_*] using reg6_h_`var'.xls, excel replace bdec(2) sd(2)
+*/
+,
+***H3:干预对不同特征老师的异质性分析
+ **global control_covs  stu_age stu_gender father_edulevel mother_edulevel stu_asset_family lntea_salary lntea_experience tea_gender class_size //控制变量
+ gen treatment_tgender = treatment_true*tea_gender
+ gen treatment_texperience = treatment_true*tea_experience
+ gen treatment_tsalary = treatment_true*tea_base_salary
+ *gen treatment_thukou = treatment_true*tea_hukou
+ *gen treatment_tdegree = treatment_true*tea_degree
+
+global treatment_h_covs  treatment_tgender treatment_texperience  treatment_tsalary 
+foreach var of varlist $treatment_h_covs{
+reg z_math_endline2 treatment_true z_math_baseline `var'  $control_covs i.countyid  , vce(cluster schid)  
+est store hh_`var'
+}
+outreg2 [hh_*] using reg7_hh_`var'.xls, excel replace bdec(2) sd(2)
+
+*global tea_charac t_inneqaverse t_effortonlow t_effortonmid t_effortontop t_prosocial t_intrinsic t_op_index
+gen treat_t_inneqaverse = treatment_true*t_inneqaverse
+gen treat_t_effortonlow = treatment_true*t_effortonlow
+gen treat_t_effortonmid = treatment_true*t_effortonmid
+gen treat_t_effortontop = treatment_true*t_effortontop
+gen treat_t_prosocial = treatment_true*t_prosocial
+gen treat_t_intrinsic = treatment_true*t_intrinsic
+gen treat_t_op_index = treatment_true*t_op_index
+
+codebook treat_t_inneqaverse
+replace treat_t_inneqaverse = "3" if treat_t_inneqaverse == "A"
+replace treat_t_inneqaverse = "2" if treat_t_inneqaverse == "B"
+replace treat_t_inneqaverse = "1" if treat_t_inneqaverse == "C"
+destring treat_t_inneqaverse ,replace
+
+global treatment_t_cov1 treat_t_inneqavers treat_t_effortonlow treat_t_effortonmid treat_t_effortontop ///
+       treat_t_prosocial  treat_t_intrinsic treat_t_op_index 
+
+foreach var of varlist $treatment_t_cov1{
+reg z_math_endline2 treatment_true z_math_baseline `var'  $control_covs i.countyid  , vce(cluster schid)  
+est store hhh_`var'
+}
+outreg2 [hhh_*] using reg11_hhh_`var'.xls, excel replace bdec(2) sd(2)
+
+	  
+
+
+
+ 
+
+/*
+**方法2
+/*处理学校层面变量*/
+ **number of students
+ tab prin_b_14_15,m
+ clonevar num_of_stu = prin_b_14_15
+
+ **number of teachers
+  tab prin_b_14_16,m
+ clonevar num_of_tea = prin_b_14_16
+ **number of contract teachers
+ tab  prin_b_14_16_2,m
+ clonevar num_of_contacttea = prin_b_14_16_2
+ 
+ /*产生交互项*/
+ gen treatment_attrition = treatment_true*attrition
+ codebook treatment_attrition
+***1.balance check for students characteristics
+global students_var z_math_baseline stu_gender stu_age father_edulevel mother_edulevel stu_asset_family
+foreach var of varlist $students_var {
+  regress `var' treatment_true attrition treatment_attrition i.countyid  , vce(cluster schid)  
+       est  store f_t_across
+  est store bcs_`var'
+}
+
+outreg2 [bcs_*] using reg8_bcs_`var'.xls, excel replace bdec(2) sd(2)
+
+***2.balance check for teachers characteristics
+global teachers_var teaage tea_gender tea_ethnic tea_experience tea_base_salary class_size
+bysort tea_b_14_teaid:gen N = _n
+count if N == 1 //119 teachers
+foreach var of varlist $teachers_var {
+  regress `var' treatment_true attrition treatment_attrition i.countyid if N == 1 , vce(cluster schid) 
+  est store bct_`var'
+}
+
+outreg2 [bct_*] using reg9_bct_`var'.xls, excel replace bdec(2) sd(2)
+
+
+
+
+***3.balance check for schools characteristics
+global schools_var num_of_stu num_of_tea num_of_contacttea
+bysort schid:gen NN = _n    
+br num_of_stu num_of_tea num_of_contacttea NN
+count if NN == 1 // 103 schools
+br num_of_contacttea if NN == 1  & attrition == 1 & treatment_true == 1
+foreach var of varlist $schools_var {
+ regress `var' treatment_true   treatment_attrition attrition  i.countyid if NN == 1 ,vce(cluster schid) 
+ est store bcsc_`var'
+}
+
+outreg2 [bcsc_*] using reg10_bcsc_`var'.xls, excel replace bdec(2) sd(2)
+*/
+
+
+
+	
